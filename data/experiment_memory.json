@@ -1,0 +1,26 @@
+{
+  "experiments": [
+    {
+      "experiment_id": "exp_a987e365",
+      "description": "Experimental plan: **Hypothesis:** Birds with specific anatomical adaptations, observable under SEM, will exhibit features that could theoretically enable them to perform a backflip.\n\n**Protocol:** \n1. Collect samples o...",
+      "composition": {
+        "Cs": 0,
+        "BDA": 0
+      },
+      "results": {},
+      "metadata": {
+        "plate_format": "384-well",
+        "materials": [
+          "Cs",
+          "BDA"
+        ],
+        "plan_length": 1229
+      },
+      "timestamp": "2026-06-04T08:04:29.742574"
+    }
+  ],
+  "metadata": {
+    "last_updated": "2026-06-04T08:04:29.742582",
+    "total_experiments": 1
+  }
+}

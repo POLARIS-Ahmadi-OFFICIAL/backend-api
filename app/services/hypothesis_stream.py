@@ -1,0 +1,313 @@
+"""SSE streaming for progressive hypothesis chat updates."""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, Generator, Iterator, List, Optional
+
+from app.services.hypothesis_chat import (
+    _choose_hypothesis_next_step,
+    _choose_refine_option,
+    _hypothesis_document_fields,
+    choose_option,
+    generate_hypothesis,
+    reset_session,
+)
+from app.services.hypothesis_messages import (
+    build_hypothesis_result_bubbles,
+    build_submit_bubbles,
+    join_bubbles_for_legacy,
+)
+from app.services.hypothesis_perf import (
+    fast_submit_enabled,
+    skip_analysis_on_generate,
+    skip_socratic_answers,
+)
+from app.services.llm_runtime import require_api_key
+from app.tools import socratic
+
+
+def format_sse(event: str, data: Dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _progress(step: str, messages: List[Dict[str, str]], **extra: Any) -> Dict[str, Any]:
+    return {
+        "type": "progress",
+        "step": step,
+        "messages": messages,
+        **extra,
+    }
+
+
+def _complete(result: Dict[str, Any]) -> Dict[str, Any]:
+    return {"type": "complete", **result}
+
+
+def iter_submit_question(memory: Any, question: str) -> Iterator[Dict[str, Any]]:
+    require_api_key(memory)
+    q = question.strip()
+    if not q:
+        raise ValueError("Question is required.")
+
+    clarified = socratic.clarify_question(q)
+    if not clarified or not str(clarified).strip():
+        raise ValueError("Could not generate clarified question. Check your API key in Settings.")
+
+    yield _progress(
+        "clarify",
+        build_submit_bubbles(clarified, "", None, [])[:1],
+    )
+
+    soc_answers: Optional[str] = None
+    soc_pass: Optional[str] = None
+    thoughts: Optional[List[str]] = None
+
+    if fast_submit_enabled():
+        yield _progress("socratic_tot", [], label="Generating Socratic pass and exploration paths…")
+        soc_pass, thoughts = socratic.socratic_pass_and_tot(clarified)
+        if soc_pass and str(soc_pass).strip():
+            yield _progress(
+                "socratic_pass",
+                [
+                    {
+                        "role": "assistant",
+                        "title": "Socratic pass (probing questions)",
+                        "content": str(soc_pass).strip(),
+                    }
+                ],
+            )
+    elif skip_socratic_answers():
+        yield _progress("socratic_pass", [], label="Generating Socratic pass…")
+        soc_pass = socratic.socratic_pass(clarified)
+        if not soc_pass or not str(soc_pass).strip():
+            raise ValueError("Could not generate socratic questions.")
+        soc_answers = ""
+        yield _progress(
+            "socratic_pass",
+            [{"role": "assistant", "title": "Socratic pass (probing questions)", "content": str(soc_pass)}],
+        )
+        yield _progress("thoughts", [], label="Generating three exploration paths…")
+        thoughts = socratic.tot_generation(soc_pass, clarified, None)
+    else:
+        yield _progress("socratic_pass", [], label="Generating Socratic pass…")
+        soc_pass = socratic.socratic_pass(clarified)
+        if not soc_pass or not str(soc_pass).strip():
+            raise ValueError("Could not generate socratic questions.")
+        yield _progress(
+            "socratic_pass",
+            [{"role": "assistant", "title": "Socratic pass (probing questions)", "content": str(soc_pass)}],
+        )
+        yield _progress("socratic_answers", [], label="Generating Socratic reasoning…")
+        soc_answers = socratic.socratic_answer_questions(clarified, soc_pass)
+        if soc_answers and str(soc_answers).strip():
+            yield _progress(
+                "socratic_answers",
+                [{"role": "assistant", "title": "Socratic reasoning", "content": str(soc_answers)}],
+            )
+        yield _progress("thoughts", [], label="Generating three exploration paths…")
+        thoughts = socratic.tot_generation(soc_pass, clarified, soc_answers)
+
+    if not soc_pass or not str(soc_pass).strip():
+        raise ValueError("Could not generate socratic questions.")
+    if not thoughts:
+        raise ValueError("Could not generate exploration options.")
+
+    thoughts = list(thoughts)[:3]
+    while len(thoughts) < 3:
+        thoughts.append(f"Option {len(thoughts) + 1}: Continue exploring")
+
+    thought_bubbles = []
+    for i, thought in enumerate(thoughts[:3], 1):
+        if thought and str(thought).strip():
+            thought_bubbles.append(
+                {"role": "assistant", "title": f"Generated thought {i}", "content": str(thought).strip()}
+            )
+    if thought_bubbles:
+        yield _progress("thoughts", thought_bubbles)
+
+    memory.insert_interaction("user", q, "initial_question", "hypothesis")
+    memory.insert_interaction("assistant", clarified, "clarified_question", "hypothesis")
+    memory.insert_interaction("assistant", soc_pass, "socratic_pass", "hypothesis")
+    if soc_answers and str(soc_answers).strip():
+        memory.insert_interaction("assistant", soc_answers, "socratic_answers", "hypothesis")
+    memory.insert_interaction("assistant", thoughts[0], "first_thought_1", "hypothesis")
+    memory.insert_interaction("assistant", thoughts[1], "second_thought_1", "hypothesis")
+    memory.insert_interaction("assistant", thoughts[2], "third_thought_1", "hypothesis")
+
+    memory.set_var("hypothesis_round_count", 0)
+    memory.set_var("stage", "refine")
+
+    from app.services.hypothesis_chat import _bump_usage
+
+    _bump_usage(memory)
+
+    bubbles = build_submit_bubbles(clarified, soc_pass, soc_answers, thoughts)
+    yield _complete(
+        {
+            "stage": "refine",
+            "messages": bubbles,
+            "assistant_message": join_bubbles_for_legacy(bubbles),
+            "options": thoughts[:3],
+        }
+    )
+
+
+def iter_generate_hypothesis(memory: Any) -> Iterator[Dict[str, Any]]:
+    yield _progress("synthesize", [], label="Synthesizing hypothesis…")
+    if skip_analysis_on_generate():
+        result = generate_hypothesis(memory)
+        for b in result.get("messages") or []:
+            if b.get("title") == "Hypothesis":
+                yield _progress("hypothesis", [b])
+        yield _complete(result)
+        return
+
+    # Stream synthesis then analysis by running steps manually
+    from app.services.hypothesis_chat import _agent, _full_context, _next_step_options
+    from app.services.hypothesis_perf import run_in_background
+    from app.tools.mcp_orchestrator_bridge import sync_hypothesis_proposal
+
+    require_api_key(memory)
+    agent = _agent(memory)
+    opt1, opt2, opt3 = _next_step_options(memory)
+    soc_q = (
+        memory.view_component("retry_thinking_question")
+        or memory.view_component("socratic_pass")
+        or memory.view_component("clarified_question")
+        or "How can we continue exploring this hypothesis?"
+    )
+    selected = (
+        memory.view_component("last_selected_option")
+        or opt1
+        or memory.view_component("first_thought_1")
+        or "Selected option"
+    )
+    prev1 = (
+        memory.view_component("last_prev1")
+        or opt2
+        or memory.view_component("second_thought_1")
+        or "Previous option 1"
+    )
+    prev2 = (
+        memory.view_component("last_prev2")
+        or opt3
+        or memory.view_component("third_thought_1")
+        or "Previous option 2"
+    )
+    if not soc_q or not selected:
+        raise ValueError(
+            "Insufficient context to generate hypothesis. Complete at least one exploration step first."
+        )
+
+    context = _full_context(agent)
+    hypothesis = socratic.hypothesis_synthesis(soc_q, selected, prev1, prev2, context)
+    if hypothesis is None or not str(hypothesis).strip():
+        raise ValueError("Error generating hypothesis. Check your API key in Settings.")
+
+    hyp_bubble = {"role": "assistant", "title": "Hypothesis", "content": str(hypothesis).strip()}
+    yield _progress("hypothesis", [hyp_bubble])
+
+    yield _progress("analysis", [], label="Generating analysis report…")
+    socratic_question_for_analysis = (
+        memory.view_component("retry_thinking_question")
+        or memory.view_component("socratic_pass")
+        or soc_q
+    )
+    analysis_rubric = socratic.local_hypothesis_analysis_fallback(
+        hypothesis, socratic_question_for_analysis
+    )
+
+    memory.insert_interaction("assistant", hypothesis, "hypothesis", "hypothesis")
+    if analysis_rubric and str(analysis_rubric).strip():
+        memory.insert_interaction("assistant", analysis_rubric, "analysis_rubric", "hypothesis")
+        yield _progress(
+            "analysis",
+            [{"role": "assistant", "title": "Analysis report", "content": str(analysis_rubric).strip()}],
+        )
+
+    memory.set_var("last_hypothesis", hypothesis)
+    run_in_background(
+        lambda: sync_hypothesis_proposal(memory, hypothesis, source="hypothesis_agent_api"),
+        label="sync-hypothesis-proposal",
+    )
+    memory.set_var("hypothesis_ready", True)
+    memory.set_var("stop_hypothesis", False)
+    memory.set_var("stage", "analysis")
+
+    bubbles = build_hypothesis_result_bubbles(
+        str(hypothesis),
+        str(analysis_rubric) if analysis_rubric else None,
+    )
+    yield _complete(
+        {
+            "stage": "analysis",
+            "messages": bubbles,
+            "assistant_message": join_bubbles_for_legacy(bubbles),
+            "options": [],
+            **_hypothesis_document_fields(memory, str(hypothesis), analysis_rubric),
+        }
+    )
+
+
+def iter_handle_chat_stream(
+    memory: Any,
+    *,
+    action: str,
+    question: Optional[str] = None,
+    choice: Optional[str] = None,
+) -> Iterator[Dict[str, Any]]:
+    if action == "reset":
+        yield _complete(reset_session(memory))
+        return
+    if action == "submit_question":
+        if not question:
+            raise ValueError("question is required for submit_question")
+        yield from iter_submit_question(memory, question)
+        return
+    if action == "generate_hypothesis":
+        yield from iter_generate_hypothesis(memory)
+        return
+    if action == "choose_option":
+        if not choice:
+            raise ValueError("choice is required for choose_option")
+        stage = memory.get_var("stage")
+        label = "Generating continuation options…" if stage == "hypothesis" else "Deepening selected path…"
+        yield _progress("choose", [], label=label)
+        if stage == "refine":
+            result = _choose_refine_option(memory, choice)
+        elif stage == "hypothesis":
+            result = _choose_hypothesis_next_step(memory, choice)
+        else:
+            result = choose_option(memory, choice)
+        yield _complete(result)
+        return
+    raise ValueError(f"Unknown action: {action}")
+
+
+def iter_sse_events(
+    memory: Any,
+    *,
+    action: str,
+    question: Optional[str] = None,
+    choice: Optional[str] = None,
+) -> Generator[str, None, None]:
+    try:
+        for event in iter_handle_chat_stream(memory, action=action, question=question, choice=choice):
+            if event.get("type") == "progress":
+                yield format_sse(
+                    "progress",
+                    {
+                        "step": event.get("step"),
+                        "messages": event.get("messages", []),
+                        "label": event.get("label"),
+                    },
+                )
+            elif event.get("type") == "complete":
+                payload = {k: v for k, v in event.items() if k != "type"}
+                yield format_sse("complete", payload)
+        yield format_sse("done", {})
+    except ValueError as exc:
+        yield format_sse("error", {"error": str(exc)})
+    except Exception as exc:
+        yield format_sse("error", {"error": str(exc) or "Hypothesis agent failed"})
