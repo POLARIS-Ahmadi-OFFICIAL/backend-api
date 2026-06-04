@@ -337,20 +337,32 @@ class OrchestratorService:
         return {"ok": True}
 
 
-memory = MemoryManager()
-service = OrchestratorService(memory=memory)
+_memory: MemoryManager | None = None
+_service: OrchestratorService | None = None
+
+
+def _get_service() -> OrchestratorService:
+    """Lazy init so importing this module in tests/CI does not require Streamlit secrets."""
+    global _memory, _service
+    if _service is None:
+        _memory = MemoryManager()
+        _service = OrchestratorService(memory=_memory)
+    return _service
+
+
 app = FastAPI(title="POLARIS MCP Orchestrator", version="0.1.0")
 
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
-    return {"status": "ok", "mcp_endpoint": service._get_mcp_endpoint()}
+    svc = _get_service()
+    return {"status": "ok", "mcp_endpoint": svc._get_mcp_endpoint()}
 
 
 @app.get("/tools")
 def tools() -> Dict[str, Any]:
     try:
-        return service.list_tools()
+        return _get_service().list_tools()
     except MCPConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except MCPRequestError as exc:
@@ -359,13 +371,13 @@ def tools() -> Dict[str, Any]:
 
 @app.post("/search-papers")
 def search_papers(req: SearchPapersRequest) -> Dict[str, Any]:
-    return service.search_papers(req)
+    return _get_service().search_papers(req)
 
 
 @app.post("/process-paper")
 def process_paper(req: ProcessPaperRequest) -> Dict[str, Any]:
     try:
-        return service.process_paper(req)
+        return _get_service().process_paper(req)
     except MCPConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except MCPRequestError as exc:
@@ -374,12 +386,12 @@ def process_paper(req: ProcessPaperRequest) -> Dict[str, Any]:
 
 @app.post("/propose-hypothesis")
 def propose_hypothesis(req: ProposeHypothesisRequest) -> Dict[str, Any]:
-    return service.propose_hypothesis(req)
+    return _get_service().propose_hypothesis(req)
 
 
 @app.post("/record-hypothesis-outcome")
 def record_hypothesis_outcome(req: RecordHypothesisOutcomeRequest) -> Dict[str, Any]:
-    return service.record_hypothesis_outcome(req)
+    return _get_service().record_hypothesis_outcome(req)
 
 
 if __name__ == "__main__":

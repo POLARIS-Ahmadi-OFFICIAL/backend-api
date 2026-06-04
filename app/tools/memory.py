@@ -14,10 +14,13 @@ import uuid
 # Lazy import streamlit to avoid issues in headless mode
 try:
     import streamlit as st
+    from streamlit.errors import StreamlitSecretNotFoundError
+
     STREAMLIT_AVAILABLE = True
 except (ImportError, RuntimeError):
     STREAMLIT_AVAILABLE = False
     st = None
+    StreamlitSecretNotFoundError = Exception  # type: ignore[misc, assignment]
 
 from app.tools.database import DEFAULT_SESSION_STATE, DatabaseManager
 from app.tools.paths import get_env_path, get_user_data_dir
@@ -84,7 +87,7 @@ class MemoryManager:
                     if api_key:
                         self._db.set("api_key", api_key)
                         self._db.set("api_key_source", "secrets")
-                except (AttributeError, RuntimeError):
+                except (AttributeError, RuntimeError, StreamlitSecretNotFoundError, KeyError):
                     pass
 
         self._sync_llm_env()
