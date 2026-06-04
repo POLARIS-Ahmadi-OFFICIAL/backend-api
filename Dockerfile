@@ -11,7 +11,14 @@ COPY alembic.ini ./
 
 RUN pip install --no-cache-dir -e .
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /data
 ENV PYTHONUNBUFFERED=1
+ENV POLARIS_DB_PATH=/data/polaris.db
+ENV POLARIS_RESULTS_DIR=/data/results
+
+COPY scripts/railway-start.sh /app/scripts/railway-start.sh
+RUN chmod +x /app/scripts/railway-start.sh
+
 EXPOSE 8080
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Railway injects PORT; script runs init_db then uvicorn.
+CMD ["/app/scripts/railway-start.sh"]

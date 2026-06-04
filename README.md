@@ -15,6 +15,10 @@ uvicorn app.main:app --reload --port 8080
 
 Health: `GET http://localhost:8080/api/v1/health`
 
+### Deploy to Railway (production API)
+
+See **[docs/DEPLOY-RAILWAY.md](./docs/DEPLOY-RAILWAY.md)** for volume setup, env vars, and pointing Vercel `NEXT_PUBLIC_API_URL` at your Railway domain.
+
 ### Run API + web + mobile together
 
 From [web-frontend](../web-frontend) (with this repo’s `.venv` ready):
