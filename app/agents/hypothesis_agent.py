@@ -1,8 +1,14 @@
 from typing import Dict, Any
 import os
 
-import streamlit as st
 from app.agents.base import BaseAgent
+
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except (ImportError, RuntimeError):
+    STREAMLIT_AVAILABLE = False
+    st = None
 from app.tools.mcp_orchestrator_bridge import sync_hypothesis_outcome, sync_hypothesis_proposal
 from app.tools.memory import MemoryManager
 
@@ -30,93 +36,61 @@ class HypothesisAgent(BaseAgent):
         return 0.3
 
     def initial_process(self, question, experimental_mode=False, experimental_constraints=None):
-        try:
-            # Lazy import socratic module
-            socratic = _lazy_import_socratic()
+        socratic = _lazy_import_socratic()
 
-            resolved_api_key = (
-                self.memory.get_var("api_key")
-                or os.getenv("HUGGINGFACE_API_KEY")
-                or os.getenv("HF_API_KEY")
-                or os.getenv("LLM_API_KEY")
-                or os.getenv("DASHSCOPE_API_KEY")
+        resolved_api_key = (
+            self.memory.get_var("api_key")
+            or os.getenv("HUGGINGFACE_API_KEY")
+            or os.getenv("HF_API_KEY")
+            or os.getenv("LLM_API_KEY")
+            or os.getenv("DASHSCOPE_API_KEY")
+        )
+
+        if not resolved_api_key:
+            raise ValueError("API key not set. Configure it in Settings or set HUGGINGFACE_API_KEY / GEMINI_API_KEY in the environment.")
+
+        if not question or not question.strip():
+            raise ValueError("Question is empty. Provide a valid research question.")
+
+        try:
+            clarified_question = socratic.clarify_question(question)
+        except ValueError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Error generating clarified question: {e}") from e
+
+        if not clarified_question or not clarified_question.strip():
+            raise RuntimeError(
+                "LLM returned an empty clarified question. "
+                "Check your API key, quota, and network connectivity."
             )
 
-            if not resolved_api_key:
-                st.warning("Please enter your API key in Settings before continuing.")
-                st.info("Get your Hugging Face API key from: https://huggingface.co/settings/tokens")
-                st.stop()
-
-            # Validate question input
-            if not question or not question.strip():
-                st.error("Please provide a valid question to explore.")
-                st.stop()
-
-            # Generate clarified question with better error handling
-            try:
-                clarified_question = socratic.clarify_question(question)
-            except ValueError as e:
-                # API key error
-                st.error(f"API Key Issue: {str(e)}. Please set API key in Settings or check environment variables.")
-                st.stop()
-            except Exception as e:
-                st.error(f"Error generating clarified question: {str(e)}. Please check your API key and try again.")
-                st.stop()
-
-            if not clarified_question or not clarified_question.strip():
-                st.error("Could not generate clarified question. The LLM returned an empty response.")
-                st.warning("**Possible causes:**")
-                st.warning("1. Invalid or expired Hugging Face API key")
-                st.warning("2. Using the wrong provider key for Qwen")
-                st.info("Get your Hugging Face API key from: https://huggingface.co/settings/tokens")
-                st.warning("3. API quota exceeded")
-                st.warning("4. Network connectivity issues")
-                st.stop()
-
-            # Generate socratic questions
-            try:
-                socratic_questions = socratic.socratic_pass(clarified_question)
-            except Exception as e:
-                st.error(f"Error generating socratic questions: {str(e)}. Please try again.")
-                st.stop()
-                
-            if not socratic_questions or not socratic_questions.strip():
-                st.error("Could not generate socratic questions. Please try again!")
-                st.stop()
-
-            if socratic_questions:
-                socratic_answers = None
-                try:
-                    socratic_answers = socratic.socratic_answer_questions(clarified_question, socratic_questions)
-                except Exception as e:
-                    st.error(f"EXCEPTION in socratic answers: {e}")
-                    st.stop()
-
-                if experimental_mode and experimental_constraints:
-                    thoughts = socratic.tot_generation_experimental_plan(
-                    socratic_questions, clarified_question, experimental_constraints)
-                else:
-                    # Calling TOT with socratic answers (if available)
-                    thoughts = socratic.tot_generation(socratic_questions, clarified_question, socratic_answers)
-                    if not thoughts:
-                        st.error("TOT Generation returned None or empty. Try again!")
-                        st.stop()
-            else:
-                st.error("Could not generate socratic questions. Please try again!")
-                st.stop()
-
-            if len(thoughts) < 3:
-                thoughts = list(thoughts) + [""] * (3-len(thoughts))
-
-            return clarified_question, socratic_questions, thoughts[:3], socratic_answers
-
-        except ValueError as e:
-            # API Key related error
-            st.error(f"Error: API Key Issue; Please set API key in Settings or check environment variables.")
-            st.stop()
+        try:
+            socratic_questions = socratic.socratic_pass(clarified_question)
         except Exception as e:
-            st.error(f"Error occurred: {e}; Please try again!")
-            st.stop()
+            raise RuntimeError(f"Error generating Socratic questions: {e}") from e
+
+        if not socratic_questions or not socratic_questions.strip():
+            raise RuntimeError("LLM returned empty Socratic questions. Please try again.")
+
+        socratic_answers = None
+        try:
+            socratic_answers = socratic.socratic_answer_questions(clarified_question, socratic_questions)
+        except Exception as e:
+            raise RuntimeError(f"Error generating Socratic answers: {e}") from e
+
+        if experimental_mode and experimental_constraints:
+            thoughts = socratic.tot_generation_experimental_plan(
+                socratic_questions, clarified_question, experimental_constraints)
+        else:
+            thoughts = socratic.tot_generation(socratic_questions, clarified_question, socratic_answers)
+            if not thoughts:
+                raise RuntimeError("Tree-of-Thought generation returned empty results. Please try again.")
+
+        if len(thoughts) < 3:
+            thoughts = list(thoughts) + [""] * (3 - len(thoughts))
+
+        return clarified_question, socratic_questions, thoughts[:3], socratic_answers
 
     def build_conversation_context(self, prompt_session_id: str = None):
         """ Build full conversation context from all interactions """
@@ -180,16 +154,13 @@ class HypothesisAgent(BaseAgent):
         if self.memory.get_var("conversation_events", []):
             latest = self.memory.get_latest_history()
             payload = latest.get("payload", {})
-            context = f"Previous question: {payload['question']}\n"
-
-            if payload["thoughts"]:
-                context += f"Previous thoughts: {latest['thoughts'][:200]}...\n"
-            if payload["hypothesis"]:
+            context = f"Previous question: {payload.get('question', '')}\n"
+            if payload.get("thoughts"):
+                context += f"Previous thoughts: {str(payload['thoughts'])[:200]}...\n"
+            if payload.get("hypothesis"):
                 context += f"Previous hypothesis: {payload['hypothesis']}\n"
-
             return context
-        else:
-            return ""
+        return ""
 
     def _build_negative_hypotheses_context(self) -> str:
         """Build context from past negative hypotheses for model learning."""
@@ -234,7 +205,15 @@ class HypothesisAgent(BaseAgent):
             st.error(f"Error generating hypothesis: {str(e)}. Please check your API key and try again.")
             st.stop()
 
-    def run_agent(self, memory):
+    def run_agent(self, memory) -> Dict[str, Any]:
+        if not STREAMLIT_AVAILABLE or st is None:
+            return {
+                "status": "ready",
+                "message": "Use POST /api/v1/agents/hypothesis/chat or /chat/stream for the interactive hypothesis flow.",
+                "stage": str(memory.get_var("stage") or "initial"),
+                "hypothesis_preview": (memory.view_component("hypothesis") or "")[:500] or None,
+            }
+
         # If stop button is pressed, jump straight to hypothesis
         if memory.get_var("stop_hypothesis") and memory.get_var("stage") != "analysis":
             with st.chat_message("assistant"):
@@ -314,8 +293,6 @@ class HypothesisAgent(BaseAgent):
 
                 with st.chat_message("assistant"):
                     with st.spinner("Thinking..."):
-                        st.write("DEBUG: Calling initial_process...")
-
                         cl_question, soc_pass, thoughts_gen, soc_answers = self.initial_process(
                             question)
 

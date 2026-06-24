@@ -5,11 +5,13 @@ Supports Qwen (Hugging Face router) and Google Gemini.
 
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
 _logger = logging.getLogger(__name__)
 
+_gemini_lock = threading.Lock()
 _last_gemini_request_at: float = 0.0
 
 SUPPORTED_PROVIDERS = ("qwen", "gemini")
@@ -117,12 +119,13 @@ def _throttle_gemini() -> None:
     interval = _gemini_min_interval_sec()
     if interval <= 0:
         return
-    now = time.monotonic()
-    wait = interval - (now - _last_gemini_request_at)
-    if wait > 0:
-        _logger.info("Gemini throttle: sleeping %.1fs before next request", wait)
-        time.sleep(wait)
-    _last_gemini_request_at = time.monotonic()
+    with _gemini_lock:
+        now = time.monotonic()
+        wait = interval - (now - _last_gemini_request_at)
+        if wait > 0:
+            _logger.info("Gemini throttle: sleeping %.1fs before next request", wait)
+            time.sleep(wait)
+        _last_gemini_request_at = time.monotonic()
 
 
 def _is_gemini_rate_limit_error(exc: BaseException) -> bool:

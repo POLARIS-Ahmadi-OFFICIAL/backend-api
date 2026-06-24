@@ -1,18 +1,23 @@
 from typing import Dict, Any, Optional, List
 import json
 import os
-import streamlit as st
+
 from app.agents.base import BaseAgent
 from app.tools.mcp_orchestrator_bridge import sync_hypothesis_outcome
 from app.tools.memory import MemoryManager
-from app.tools import socratic
 from app.tools.experiment_memory import get_experiment_memory
+
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except (ImportError, RuntimeError):
+    STREAMLIT_AVAILABLE = False
+    st = None
 
 # Lazy import socratic module - only import when needed
 _socratic_module = None
 
 def _lazy_import_socratic():
-    """Lazy import of socratic module to speed up module loading"""
     global _socratic_module
     if _socratic_module is None:
         from app.tools import socratic
@@ -44,30 +49,21 @@ class AnalysisAgent(BaseAgent):
 
         # High confidence if GP or Monte Carlo results exist (can analyze goal + ML only)
         try:
-            import streamlit as st
             gp_results = self.memory.get_var("gp_results")
             mc_results = self.memory.get_var("monte_carlo_results")
             research_goal = self.memory.get_var("research_goal", "")
             if (gp_results or mc_results) and research_goal:
                 return 0.85
-        except (ImportError, RuntimeError, AttributeError):
+        except (RuntimeError, AttributeError):
             pass
 
         # Medium confidence if hypothesis and experiment data exist
         try:
-            import streamlit as st
             hypothesis = self.memory.view_component("hypothesis")
             if not hypothesis:
-                try:
-                    hypothesis = self.memory.get_var("last_hypothesis")
-                except (RuntimeError, AttributeError):
-                    hypothesis = None
-            experimental_outputs = None
-            try:
-                experimental_outputs = self.memory.get_var("experimental_outputs")
-            except (RuntimeError, AttributeError):
-                pass
-        except (ImportError, RuntimeError):
+                hypothesis = self.memory.get_var("last_hypothesis")
+            experimental_outputs = self.memory.get_var("experimental_outputs")
+        except (RuntimeError, AttributeError):
             hypothesis = None
             experimental_outputs = None
 
@@ -78,25 +74,24 @@ class AnalysisAgent(BaseAgent):
         return 0.3
     
     def _get_curve_fitting_results(self) -> Optional[Dict[str, Any]]:
-        """Retrieve curve fitting results from files or session state."""
-        # Try to get from session state first
-        if hasattr(st.session_state, 'curve_fitting_results'):
-            return self.memory.get_var("curve_fitting_results")
-        
-        # Try to find results JSON files in results directory
+        """Retrieve curve fitting results from memory or results directory."""
+        import logging
+        stored = self.memory.get_var("curve_fitting_results")
+        if stored:
+            return stored
+
         results_dir = "results"
         if os.path.exists(results_dir):
             json_files = [f for f in os.listdir(results_dir) if f.endswith("_peak_fit_results.json")]
             if json_files:
-                # Use the most recent file
                 latest_file = max(json_files, key=lambda f: os.path.getmtime(os.path.join(results_dir, f)))
                 file_path = os.path.join(results_dir, latest_file)
                 try:
-                    with open(file_path, 'r') as f:
+                    with open(file_path, "r") as f:
                         return json.load(f)
                 except Exception as e:
-                    st.warning(f"Could not load curve fitting results from {file_path}: {e}")
-        
+                    logging.warning("Could not load curve fitting results from %s: %s", file_path, e)
+
         return None
     
     def _get_gp_results(self) -> Optional[Dict[str, Any]]:
@@ -444,12 +439,20 @@ class AnalysisAgent(BaseAgent):
             new_question = socratic.generate_text_with_llm(prompt)
             return new_question.strip() if new_question else None
         except Exception as e:
-            st.error(f"Error generating new question: {e}")
+            import logging
+            logging.warning("Error generating new research question: %s", e)
             return None
-    
-    def run_agent(self, memory: MemoryManager) -> None:
+
+    def run_agent(self, memory: MemoryManager) -> Dict[str, Any]:
         """Render UI and handle analysis agent interactions."""
-        
+        if not STREAMLIT_AVAILABLE or st is None:
+            return {
+                "status": "ready",
+                "message": "Use POST /api/v1/agents/analysis to run analysis.",
+                "has_curve_results": self._get_curve_fitting_results() is not None,
+                "has_gp_results": self.memory.get_var("gp_results") is not None,
+            }
+
         # Check for API key
         if not memory.get_var("api_key"):
             st.warning("Please enter your API key in Settings before continuing.")

@@ -1,6 +1,7 @@
 import os
 import logging
 import subprocess
+import sys
 import tempfile
 
 DEFAULT_TIMEOUT = 120
@@ -32,10 +33,11 @@ class ScriptExecutor:
                 env["HUGGINGFACE_API_KEY"] = self.huggingface_key
 
             # Use the Python interpreter from the virtual environment
-            python_executable = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".venv", "Scripts", "python.exe")
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            venv_sub = ("Scripts", "python.exe") if sys.platform == "win32" else ("bin", "python")
+            python_executable = os.path.join(base_dir, ".venv", *venv_sub)
             if not os.path.exists(python_executable):
-                # Fallback to system python
-                python_executable = "python"
+                python_executable = sys.executable
 
             # Don't use check=True to capture error details
             result = subprocess.run([python_executable, temp_script], env=env, capture_output=True, text=True, timeout=self.timeout)

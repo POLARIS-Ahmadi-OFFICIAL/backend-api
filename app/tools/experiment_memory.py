@@ -4,11 +4,13 @@ and enable automated workflow memory.
 """
 
 import json
+import logging
 import os
-import streamlit as st
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 from app.tools.paths import is_frozen, get_user_data_dir
 
@@ -53,7 +55,7 @@ class ExperimentMemory:
                 with open(file_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
-                st.warning(f"Could not load experiment memory: {e}")
+                _logger.warning("Could not load experiment memory: %s", e)
                 return {"experiments": [], "metadata": {}}
         return {"experiments": [], "metadata": {}}
 
@@ -65,7 +67,7 @@ class ExperimentMemory:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(memory_data, f, indent=2)
         except Exception as e:
-            st.error(f"Could not save experiment memory: {e}")
+            _logger.error("Could not save experiment memory: %s", e)
     
     def add_experiment(
         self,
@@ -207,12 +209,9 @@ class ExperimentMemory:
 
 
 def get_experiment_memory(memory_manager=None) -> ExperimentMemory:
-    """Get or create experiment memory instance.
-    Uses memory_manager.get_var if provided, else falls back to st.session_state for compatibility.
-    """
-    try:
-        import streamlit as st
-        if memory_manager is not None:
+    """Get or create experiment memory instance backed by memory_manager (SQLite)."""
+    if memory_manager is not None:
+        try:
             exp_mem = memory_manager.get_var("experiment_memory")
             if exp_mem is None:
                 memory_file = memory_manager.get_var("experiment_memory_file", "experiment_memory.json")
@@ -220,6 +219,12 @@ def get_experiment_memory(memory_manager=None) -> ExperimentMemory:
                 exp_mem = ExperimentMemory(memory_file=memory_file, memory_dir=data_dir)
                 memory_manager.set_var("experiment_memory", exp_mem)
             return exp_mem
+        except (RuntimeError, AttributeError):
+            pass
+
+    # Streamlit fallback when no memory_manager provided
+    try:
+        import streamlit as st
         if "experiment_memory" not in st.session_state:
             memory_file = st.session_state.get("experiment_memory_file", "experiment_memory.json")
             data_dir = st.session_state.get("experiment_data_dir", "data")

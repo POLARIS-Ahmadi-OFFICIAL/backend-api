@@ -1,5 +1,6 @@
 
 from typing import Any, Dict, List, Optional
+import inspect
 import logging
 
 from app.tools import socratic
@@ -64,12 +65,14 @@ class AgentRouter:
             except (RuntimeError, AttributeError, NameError):
                 pass
 
+        hyp_preview = (last_hypothesis[:300] + "...") if last_hypothesis and len(last_hypothesis) > 300 else last_hypothesis
+
         context = {
             "trigger_file": payload.get("trigger_file"),
             "source": payload.get("source"),
             "session_context": session_ctx,
             "uploaded_files": uploaded_files,
-            "last_hypothesis": last_hypothesis,
+            "last_hypothesis": hyp_preview,
             "experimental_outputs": experimental_outputs,
             "experimental_constraints": experimental_constraints,
             "curve_fitting_results": curve_fitting_results is not None,
@@ -203,8 +206,8 @@ Return ONLY the exact name of the chosen agent from the list above, with no expl
             )
             if api_key:
                 llm_agent = self._llm_select_agent(payload, memory)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("LLM agent selection failed (suggest_next_agent): %s", e)
 
         chosen = llm_agent or top_agent
         return {
@@ -247,15 +250,14 @@ Return ONLY the exact name of the chosen agent from the list above, with no expl
             if agent is None:
                 raise RuntimeError("Manual workflow is empty or exhausted.")
 
-            # Advance workflow index for next call
+            # Advance workflow index for next call (SQLite-backed, always safe)
             try:
-                if STREAMLIT_AVAILABLE and hasattr(st, 'session_state'):
-                    memory.set_var("workflow_index", memory.get_var("workflow_index", 0) + 1)
-                    counts = memory.get_var("agent_usage_counts", {})
-                    counts["router"] = counts.get("router", 0) + 1
-                    agent_key = getattr(agent, "name", "unknown").split()[0].lower()
-                    counts[agent_key] = counts.get(agent_key, 0) + 1
-                    memory.set_var("agent_usage_counts", counts)
+                memory.set_var("workflow_index", memory.get_var("workflow_index", 0) + 1)
+                counts = memory.get_var("agent_usage_counts", {})
+                counts["router"] = counts.get("router", 0) + 1
+                agent_key = getattr(agent, "name", "unknown").split()[0].lower()
+                counts[agent_key] = counts.get(agent_key, 0) + 1
+                memory.set_var("agent_usage_counts", counts)
             except (RuntimeError, AttributeError):
                 pass
             return agent.run_agent(memory)
@@ -318,19 +320,17 @@ Return ONLY the exact name of the chosen agent from the list above, with no expl
         chosen_agent = llm_agent or top_agent
 
         try:
-            # Update usage counts if Streamlit is available
+            # Update usage counts (SQLite-backed, always safe)
             try:
-                if STREAMLIT_AVAILABLE and hasattr(st, 'session_state'):
-                    counts = memory.get_var("agent_usage_counts", {})
-                    counts["router"] = counts.get("router", 0) + 1
-                    key = getattr(chosen_agent, "name", "unknown").split()[0].lower()
-                    counts[key] = counts.get(key, 0) + 1
-                    memory.set_var("agent_usage_counts", counts)
+                counts = memory.get_var("agent_usage_counts", {})
+                counts["router"] = counts.get("router", 0) + 1
+                key = getattr(chosen_agent, "name", "unknown").split()[0].lower()
+                counts[key] = counts.get(key, 0) + 1
+                memory.set_var("agent_usage_counts", counts)
             except (RuntimeError, AttributeError):
                 pass
             
             # Pass payload to run_agent if it accepts it
-            import inspect
             sig = inspect.signature(chosen_agent.run_agent)
             if 'payload' in sig.parameters:
                 return chosen_agent.run_agent(memory, payload=payload)

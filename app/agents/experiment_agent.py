@@ -1,12 +1,18 @@
 import base64
 from typing import Dict, Any
 
-import streamlit as st
 from app.agents.base import BaseAgent
 from app.tools import socratic
 from app.tools.memory import MemoryManager
 import csv
 import io
+
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except (ImportError, RuntimeError):
+    STREAMLIT_AVAILABLE = False
+    st = None
 
 # Lazy import heavy modules
 try:
@@ -517,7 +523,14 @@ class ExperimentAgent(BaseAgent):
 
         return context
 
-    def run_agent(self, memory):
+    def run_agent(self, memory) -> Dict[str, Any]:
+        if not STREAMLIT_AVAILABLE or st is None:
+            return {
+                "status": "ready",
+                "message": "Use POST /api/v1/agents/experiment to run the experiment pipeline.",
+                "has_hypothesis": bool(self.memory.view_component("hypothesis") or memory.get_var("manual_hypothesis")),
+            }
+
         constraints = memory.get_var("experimental_constraints", {})
 
         # Check for API key
