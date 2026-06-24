@@ -14,7 +14,7 @@ async def ml_models_node(state: PolarisGraphState, config: RunnableConfig) -> Po
     memory = get_memory_manager()
     agent = MLModelsAgent("ML Models Agent")
     agent.memory = memory
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, agent.run_agent, memory)
     gp_results = memory.get_var("gp_results") or result.get("gp_results")
     return MemoryAdapter.write(
