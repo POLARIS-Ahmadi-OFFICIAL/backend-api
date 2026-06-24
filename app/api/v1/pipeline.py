@@ -88,7 +88,7 @@ async def resume_pipeline(body: ResumeRequest) -> Dict[str, Any]:
 
     try:
         await pipeline.aupdate_state(config, {"interrupt_payload": None})
-        async for _ in pipeline.astream(body.decision, config=config):
+        async for _ in pipeline.astream(None, config=config):
             pass
     except Exception as exc:
         _logger.debug("Pipeline paused or errored on resume: %s", exc)
