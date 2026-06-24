@@ -16,9 +16,9 @@ ENV PYTHONUNBUFFERED=1
 ENV POLARIS_DB_PATH=/data/polaris.db
 ENV POLARIS_RESULTS_DIR=/data/results
 
-COPY scripts/railway-start.sh /app/scripts/railway-start.sh
-RUN chmod +x /app/scripts/railway-start.sh
+COPY scripts/start.sh /app/scripts/start.sh
+RUN chmod +x /app/scripts/start.sh
 
 EXPOSE 8080
-# Railway injects PORT; script runs init_db then uvicorn.
-CMD ["/app/scripts/railway-start.sh"]
+# Render/Railway injects PORT; script runs init_db then uvicorn.
+CMD ["/app/scripts/start.sh"]
