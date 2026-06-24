@@ -2,6 +2,7 @@
 Platform-specific paths for Polaris Ahmadi.
 Supports both development and PyInstaller frozen executable.
 """
+from __future__ import annotations
 
 import os
 import sys

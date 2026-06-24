@@ -44,8 +44,12 @@ def get_llm(memory: "MemoryManager") -> BaseChatModel:
         or os.getenv("QWEN_BASE_URL")
         or "https://router.huggingface.co/v1"
     )
+    # Use a placeholder key when none is configured so the client object can be
+    # constructed without raising at import time; real calls will still fail
+    # if the key is genuinely absent.
+    effective_key = api_key or "placeholder-not-set"
     return ChatOpenAI(
         model=model or "Qwen/Qwen2.5-72B-Instruct",
-        api_key=api_key,
+        api_key=effective_key,
         base_url=base_url,
     )
