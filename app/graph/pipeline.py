@@ -4,10 +4,12 @@ import logging
 from typing import Optional
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.graph.checkpointer import get_checkpointer
-from app.graph.interrupts import INTERRUPT_NODES
+# INTERRUPT_NODES documents which sub-graph nodes pause — sub-graphs call interrupt() internally
+# from app.graph.interrupts import INTERRUPT_NODES
 from app.graph.nodes.analysis import analysis_subgraph
 from app.graph.nodes.curve_fitting import curve_fitting_subgraph
 from app.graph.nodes.experiment import experiment_subgraph
@@ -30,7 +32,7 @@ def _route_after_analysis(state: PolarisGraphState) -> str:
     return END
 
 
-def build_pipeline(checkpointer: Optional[BaseCheckpointSaver] = None) -> object:
+def build_pipeline(checkpointer: Optional[BaseCheckpointSaver] = None) -> CompiledStateGraph:
     """Build and compile the top-level POLARIS pipeline StateGraph."""
     g = StateGraph(PolarisGraphState)
 
@@ -63,7 +65,7 @@ def build_pipeline(checkpointer: Optional[BaseCheckpointSaver] = None) -> object
     return g.compile(checkpointer=cp)
 
 
-def get_pipeline() -> object:
+def get_pipeline() -> CompiledStateGraph:
     """Singleton accessor for the production pipeline (uses AsyncSqliteSaver)."""
     global _pipeline
     if _pipeline is None:
