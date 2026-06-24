@@ -10,6 +10,14 @@ from langchain_openai import ChatOpenAI
 if TYPE_CHECKING:
     from app.tools.memory import MemoryManager
 
+# Configure retry exception types for Gemini transient errors
+try:
+    from google.api_core.exceptions import GoogleAPICallError
+    _GEMINI_RETRY_TYPES = (GoogleAPICallError,)
+except ImportError:
+    from langchain_core.exceptions import LangChainException
+    _GEMINI_RETRY_TYPES = (LangChainException,)
+
 
 def get_llm(memory: "MemoryManager") -> BaseChatModel:
     """
@@ -26,7 +34,7 @@ def get_llm(memory: "MemoryManager") -> BaseChatModel:
             google_api_key=api_key,
         )
         return llm.with_retry(
-            retry_if_exception_type=(Exception,),
+            retry_if_exception_type=_GEMINI_RETRY_TYPES,
             wait_exponential_jitter=True,
             stop_after_attempt=3,
         )
