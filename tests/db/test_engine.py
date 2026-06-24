@@ -29,3 +29,14 @@ async def test_get_async_engine_returns_engine(monkeypatch, tmp_path):
     importlib.reload(eng)
     engine = eng.get_async_engine()
     assert isinstance(engine, AsyncEngine)
+
+
+async def test_init_checkpointer_returns_sqlite_saver(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path}/ckpt.db")
+    import importlib, app.db.engine as eng, app.graph.checkpointer as ckpt
+    importlib.reload(eng); eng._engine = None
+    importlib.reload(ckpt); ckpt._checkpointer = None; ckpt._conn = None
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    saver = await ckpt.init_checkpointer()
+    assert isinstance(saver, AsyncSqliteSaver)
+    await ckpt.close_checkpointer()

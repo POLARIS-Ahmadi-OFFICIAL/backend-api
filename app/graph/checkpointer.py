@@ -1,40 +1,37 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
+from typing import Union
+from app.db.engine import get_db_url
 
-import aiosqlite
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
-# Module-level singleton — set by the FastAPI lifespan before any request arrives
-_checkpointer: Optional[AsyncSqliteSaver] = None
-_conn: Optional[aiosqlite.Connection] = None
+_checkpointer = None
+_conn = None
 
 
-def _db_path() -> str:
-    # Resolve <repo_root>/data/polaris.db regardless of where the process runs
-    here = Path(__file__).resolve()
-    repo_root = here.parent.parent.parent  # app/graph/checkpointer.py → 3 levels up to backend-api/
-    db = repo_root / "data" / "polaris.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    return str(db)
-
-
-async def init_checkpointer() -> AsyncSqliteSaver:
-    """Open the aiosqlite connection and return an AsyncSqliteSaver.
-
-    Call this once from the FastAPI lifespan. The returned saver stays live
-    as long as the underlying connection is open.
-    """
+async def init_checkpointer():
+    """Open the appropriate checkpointer based on DATABASE_URL."""
     global _checkpointer, _conn
-    _conn = await aiosqlite.connect(_db_path())
-    _checkpointer = AsyncSqliteSaver(_conn)
-    await _checkpointer.setup()
+    url = get_db_url()
+    if url.startswith("postgresql"):
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        import psycopg
+        # psycopg3 connection string: replace asyncpg scheme
+        pg_url = url.replace("postgresql+asyncpg://", "postgresql://")
+        _conn = await psycopg.AsyncConnection.connect(pg_url)
+        _checkpointer = AsyncPostgresSaver(_conn)
+        await _checkpointer.setup()
+    else:
+        import aiosqlite
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        from pathlib import Path
+        db_path = url.replace("sqlite+aiosqlite:///", "")
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        _conn = await aiosqlite.connect(db_path)
+        _checkpointer = AsyncSqliteSaver(_conn)
+        await _checkpointer.setup()
     return _checkpointer
 
 
 async def close_checkpointer() -> None:
-    """Close the aiosqlite connection on app shutdown."""
     global _checkpointer, _conn
     if _conn is not None:
         await _conn.close()
@@ -42,11 +39,7 @@ async def close_checkpointer() -> None:
         _checkpointer = None
 
 
-def get_checkpointer() -> AsyncSqliteSaver:
-    """Return the already-initialised checkpointer singleton.
-
-    Raises RuntimeError if called before init_checkpointer().
-    """
+def get_checkpointer():
     if _checkpointer is None:
         raise RuntimeError(
             "Checkpointer has not been initialised. "

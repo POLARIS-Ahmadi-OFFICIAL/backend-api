@@ -22,7 +22,7 @@ if __name__ == "__main__":
     _root = os.path.dirname(os.path.abspath(__file__))
     if _root not in sys.path:
         sys.path.insert(0, _root)
-    # Load .env so POLARIS_DB_PATH is picked up
+    # Load .env so DATABASE_URL is picked up
     try:
         from dotenv import load_dotenv
         load_dotenv(os.path.join(_root, ".env"))
@@ -32,27 +32,39 @@ if __name__ == "__main__":
 
 def init_database() -> str:
     """
-    Create the database file, tables, and default values.
-    Returns the path to the database file.
+    Initialize the database. Runs Alembic migrations for Postgres,
+    or SQLite schema init for SQLite.
+    Returns a status string.
     """
-    from app.tools.database import DatabaseManager
-    from app.tools.paths import get_db_path, get_user_data_dir
+    import os
+    import subprocess
+    import sys
+    from app.db.engine import get_db_url
 
-    db_path = get_db_path()
-    user_dir = get_user_data_dir()
-
-    db = DatabaseManager()
-    db.init_schema()
-    db.ensure_defaults()
-
-    return db_path
+    url = get_db_url()
+    if url.startswith("postgresql"):
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(result.stderr, file=sys.stderr)
+            raise RuntimeError(f"Alembic migration failed: {result.stderr}")
+        print(result.stdout)
+        return "postgres"
+    else:
+        from app.tools.database import DatabaseManager
+        db = DatabaseManager()
+        db.init_schema()
+        db.ensure_defaults()
+        db_path = url.replace("sqlite+aiosqlite:///", "")
+        return db_path
 
 
 if __name__ == "__main__":
     try:
-        path = init_database()
-        shared = " (shared)" if os.environ.get("POLARIS_DB_PATH") else ""
-        print(f"Database initialized{shared}: {path}")
+        result = init_database()
+        print(f"Database initialized: {result}")
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

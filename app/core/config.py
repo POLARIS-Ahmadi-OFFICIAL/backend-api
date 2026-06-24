@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     supabase_jwt_audience: str = "authenticated"
     auth_disabled: bool = True
 
-    database_url: str = "sqlite:///./data/polaris.db"
+    database_url: str = "sqlite+aiosqlite:///./data/polaris.db"
     polaris_db_path: str = ""
 
     llm_provider: str = "qwen"
