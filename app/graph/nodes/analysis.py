@@ -28,7 +28,7 @@ async def _run_analysis_node(state: PolarisGraphState, config: RunnableConfig) -
     except Exception as exc:
         _logger.warning("run_analysis_pipeline failed: %s", exc)
         analysis = None
-    return MemoryAdapter.write(memory, state, analysis_results=analysis or True)
+    return MemoryAdapter.write(memory, state, analysis_results=analysis if analysis is not None else {})
 
 
 async def _evaluate_outcome_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
@@ -45,28 +45,24 @@ async def _evaluate_outcome_node(state: PolarisGraphState, config: RunnableConfi
 async def _decide_next_step_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
     memory = get_memory_manager()
     verdict = memory.get_var("analysis_verdict") or "complete"
+    payload = {
+        "stage": "analysis",
+        "verdict": verdict,
+        "hint": "Analysis complete. Review before finalizing.",
+    }
+    interrupt(payload)  # pause — frontend reviews; on resume, graph routes via conditional edge
     return MemoryAdapter.write(
         memory, state,
         stage=verdict,
-        interrupt_payload={
-            "stage": "analysis",
-            "verdict": verdict,
-            "hint": "Analysis complete. Review before finalizing.",
-        },
+        interrupt_payload=None,
     )
 
 
-def _route_after_checkpoint(state: PolarisGraphState) -> str:
+def _route_after_decide(state: PolarisGraphState) -> str:
     """Conditional edge: route to experiment loop or END based on analysis verdict."""
     memory = get_memory_manager()
     verdict = memory.get_var("analysis_verdict") or "complete"
     return verdict  # "needs_more_experiments" | "complete"
-
-
-async def _analysis_checkpoint_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
-    payload = state.get("interrupt_payload") or {}
-    interrupt(payload)
-    return {**state, "interrupt_payload": None}
 
 
 def analysis_subgraph() -> CompiledStateGraph:
@@ -75,15 +71,13 @@ def analysis_subgraph() -> CompiledStateGraph:
     g.add_node("run_analysis", _run_analysis_node)
     g.add_node("evaluate_outcome", _evaluate_outcome_node)
     g.add_node("decide_next_step", _decide_next_step_node)
-    g.add_node("analysis_checkpoint", _analysis_checkpoint_node)
     g.set_entry_point("gather_context")
     g.add_edge("gather_context", "run_analysis")
     g.add_edge("run_analysis", "evaluate_outcome")
     g.add_edge("evaluate_outcome", "decide_next_step")
-    g.add_edge("decide_next_step", "analysis_checkpoint")
     g.add_conditional_edges(
-        "analysis_checkpoint",
-        _route_after_checkpoint,
+        "decide_next_step",
+        _route_after_decide,
         {"needs_more_experiments": END, "complete": END},
     )
     return g.compile()

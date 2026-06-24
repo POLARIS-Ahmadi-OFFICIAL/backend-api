@@ -8,7 +8,7 @@ from langgraph.types import interrupt
 from langchain_core.runnables import RunnableConfig
 
 from app.graph.state import PolarisGraphState
-from app.services.hypothesis_chat import submit_question
+from app.services.hypothesis_chat import choose_option, submit_question
 from app.services.memory_service import get_memory_manager
 from app.tools.memory_adapter import MemoryAdapter
 
@@ -17,7 +17,6 @@ _logger = logging.getLogger(__name__)
 
 async def _clarify_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
     memory = get_memory_manager()
-    question = state.get("research_goal") or memory.get_var("research_goal") or ""  # noqa: F841
     return MemoryAdapter.write(memory, state, current_agent="hypothesis", stage="hypothesis")
 
 
@@ -26,12 +25,9 @@ async def _socratic_node(state: PolarisGraphState, config: RunnableConfig) -> Po
     question = state.get("research_goal") or memory.get_var("research_goal") or ""
     try:
         # Delegates to existing hypothesis_chat service which handles the full socratic + ToT pipeline
-        result = submit_question(memory, question)  # noqa: F841
-        hyp = memory.view_component("hypothesis")  # noqa: F841
+        submit_question(memory, question)
     except Exception as exc:
         _logger.warning("Hypothesis submit_question failed in graph node: %s", exc)
-        result = {}  # noqa: F841
-        hyp = None  # noqa: F841
     options = [
         memory.view_component("next_step_option_1"),
         memory.view_component("next_step_option_2"),
@@ -60,7 +56,6 @@ async def _tot_interrupt_node(state: PolarisGraphState, config: RunnableConfig) 
 async def _deepen_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
     memory = get_memory_manager()
     # Deepening is handled inside hypothesis_chat.choose_option
-    from app.services.hypothesis_chat import choose_option
     choice_index = int(memory.get_var("chosen_option_index") or 0)
     # choose_option expects a string "1", "2", or "3" (1-based)
     choice_str = str(choice_index + 1)
