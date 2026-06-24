@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import api_router
 from app.core.config import get_settings
+from app.graph.checkpointer import close_checkpointer, init_checkpointer
+from app.graph.pipeline import init_pipeline
 from app.services.memory_service import get_memory_manager
 
 load_dotenv()
@@ -14,7 +16,10 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_memory_manager()
+    cp = await init_checkpointer()
+    init_pipeline(cp)
     yield
+    await close_checkpointer()
 
 
 def create_app() -> FastAPI:

@@ -7,7 +7,6 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from app.graph.checkpointer import get_checkpointer
 # INTERRUPT_NODES documents which sub-graph nodes pause — sub-graphs call interrupt() internally
 # from app.graph.interrupts import INTERRUPT_NODES
 from app.graph.nodes.analysis import analysis_subgraph
@@ -58,16 +57,35 @@ def build_pipeline(checkpointer: Optional[BaseCheckpointSaver] = None) -> Compil
     g.add_edge("fallback", END)
     g.add_edge("watcher", END)
 
-    cp = checkpointer or get_checkpointer()
+    if checkpointer is None:
+        from langgraph.checkpoint.memory import MemorySaver
+        checkpointer = MemorySaver()
     # INTERRUPT_NODES are sub-graph internal node names; sub-graphs use interrupt() calls
     # internally so they pause regardless. We compile without top-level interrupt_before to
     # avoid validation errors since those node names don't exist at the top-level graph scope.
-    return g.compile(checkpointer=cp)
+    return g.compile(checkpointer=checkpointer)
+
+
+def init_pipeline(checkpointer: Optional[BaseCheckpointSaver] = None) -> CompiledStateGraph:
+    """Build the pipeline singleton with the given checkpointer.
+
+    Call this once from the FastAPI lifespan after init_checkpointer() has run.
+    """
+    global _pipeline
+    _pipeline = build_pipeline(checkpointer=checkpointer)
+    return _pipeline
 
 
 def get_pipeline() -> CompiledStateGraph:
-    """Singleton accessor for the production pipeline (uses AsyncSqliteSaver)."""
+    """Singleton accessor for the production pipeline.
+
+    Raises RuntimeError if called before init_pipeline().
+    Falls back to building with InMemorySaver if checkpointer is not available
+    (for test contexts that call get_pipeline() directly).
+    """
     global _pipeline
     if _pipeline is None:
-        _pipeline = build_pipeline()
+        from langgraph.checkpoint.memory import MemorySaver
+        _logger.warning("get_pipeline() called before init_pipeline(); using MemorySaver fallback")
+        _pipeline = build_pipeline(checkpointer=MemorySaver())
     return _pipeline

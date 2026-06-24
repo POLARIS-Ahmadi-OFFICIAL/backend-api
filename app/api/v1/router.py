@@ -11,6 +11,7 @@ from app.api.v1 import (
     llm,
     mcp,
     ml_session,
+    pipeline,
     session,
     settings,
     watcher,
@@ -32,3 +33,4 @@ api_router.include_router(mcp.router, tags=["mcp"])
 api_router.include_router(settings.router, tags=["settings"])
 api_router.include_router(session.router, tags=["session"])
 api_router.include_router(history.router, tags=["history"])
+api_router.include_router(pipeline.router, tags=["pipeline"])

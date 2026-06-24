@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
+import aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+# Module-level singleton — set by the FastAPI lifespan before any request arrives
+_checkpointer: Optional[AsyncSqliteSaver] = None
+_conn: Optional[aiosqlite.Connection] = None
 
 
 def _db_path() -> str:
@@ -14,6 +20,36 @@ def _db_path() -> str:
     return str(db)
 
 
+async def init_checkpointer() -> AsyncSqliteSaver:
+    """Open the aiosqlite connection and return an AsyncSqliteSaver.
+
+    Call this once from the FastAPI lifespan. The returned saver stays live
+    as long as the underlying connection is open.
+    """
+    global _checkpointer, _conn
+    _conn = await aiosqlite.connect(_db_path())
+    _checkpointer = AsyncSqliteSaver(_conn)
+    await _checkpointer.setup()
+    return _checkpointer
+
+
+async def close_checkpointer() -> None:
+    """Close the aiosqlite connection on app shutdown."""
+    global _checkpointer, _conn
+    if _conn is not None:
+        await _conn.close()
+        _conn = None
+        _checkpointer = None
+
+
 def get_checkpointer() -> AsyncSqliteSaver:
-    """Return an AsyncSqliteSaver bound to the project's SQLite DB."""
-    return AsyncSqliteSaver.from_conn_string(_db_path())
+    """Return the already-initialised checkpointer singleton.
+
+    Raises RuntimeError if called before init_checkpointer().
+    """
+    if _checkpointer is None:
+        raise RuntimeError(
+            "Checkpointer has not been initialised. "
+            "Ensure init_checkpointer() is awaited in the FastAPI lifespan."
+        )
+    return _checkpointer
