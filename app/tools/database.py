@@ -84,7 +84,12 @@ DEFAULT_AGENT_COUNTS = {
 
 
 def _run(coro):
-    """Run an async coroutine synchronously from sync callers."""
+    """Run an async coroutine synchronously.
+
+    When called from within a running event loop (e.g. FastAPI request), each
+    call opens a new connection via ThreadPoolExecutor + asyncio.run(), bypassing
+    the engine pool. For high-throughput paths, prefer async methods directly.
+    """
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -574,11 +579,15 @@ class DatabaseManager:
             await conn.execute(text("UPDATE workflows SET created_at = :ca, ml_model_choice = :ml WHERE id = :id"),
                                {"ca": created_at, "ml": ml_model_choice or "", "id": wf_id})
         else:
-            await conn.execute(text("INSERT INTO workflows (name, created_at, ml_model_choice) VALUES (:n, :ca, :ml)"),
-                               {"n": name, "ca": created_at, "ml": ml_model_choice or ""})
             if pg:
-                wf_id = (await conn.execute(text("SELECT id FROM workflows WHERE name = :n"), {"n": name})).fetchone()[0]
+                result = await conn.execute(text(
+                    "INSERT INTO workflows (name, created_at, ml_model_choice) VALUES (:n, :ca, :ml) RETURNING id"
+                ), {"n": name, "ca": created_at, "ml": ml_model_choice or ""})
+                wf_id = result.fetchone()[0]
             else:
+                await conn.execute(text(
+                    "INSERT INTO workflows (name, created_at, ml_model_choice) VALUES (:n, :ca, :ml)"
+                ), {"n": name, "ca": created_at, "ml": ml_model_choice or ""})
                 wf_id = (await conn.execute(text("SELECT last_insert_rowid()"))).fetchone()[0]
         for i, step in enumerate(steps):
             await conn.execute(text(
@@ -640,14 +649,6 @@ class DatabaseManager:
             state = json.loads(row[0] or "{}") if row else {}
             new_state = {k: v for k, v in state.items() if k in keep_keys}
             await conn.execute(text("UPDATE session_state SET state_json = :s WHERE id = 1"), {"s": json.dumps(new_state)})
-            # Also reset app_config keys that are experiment-scoped (e.g. "stage") back to defaults
-            for key in EXPERIMENT_SCOPED_KEYS & set(DEFAULT_APP_CONFIG.keys()):
-                if key not in keep_keys:
-                    default_val = DEFAULT_APP_CONFIG[key]
-                    if default_val is not None:
-                        await self._set_config_value_async(conn, key, default_val)
-                    else:
-                        await conn.execute(text("DELETE FROM app_config WHERE key = :k"), {"k": key})
 
     def clear_all_except(self, keep_keys: List[str]) -> None:
         _run(self._clear_all_except_async(keep_keys))

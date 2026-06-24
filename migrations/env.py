@@ -12,7 +12,11 @@ target_metadata = None
 
 
 def get_url() -> str:
-    return os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+    url = os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+    # Alembic uses a sync engine; strip async-only driver suffix
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    return url
 
 
 def run_migrations_offline() -> None:

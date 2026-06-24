@@ -113,6 +113,16 @@ def main() -> int:
                 pg.execute(text(upsert), params)
             print(f"  {table}: {len(rows)} rows migrated")
 
+        # Reset sequences so Postgres autoincrement starts after the migrated data
+        seq_tables = ["experiments", "conversation_events", "workflows",
+                      "uploaded_files", "negative_hypotheses", "hypothesis_outcomes"]
+        for tbl in seq_tables:
+            pg.execute(text(
+                f"SELECT setval(pg_get_serial_sequence('{tbl}', 'id'), "
+                f"COALESCE((SELECT MAX(id) FROM {tbl}), 1))"
+            ))
+            print(f"  {tbl}: sequence reset")
+
     print("\nMigration complete. Run: DATABASE_URL=... alembic upgrade head")
     return 0
 

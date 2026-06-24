@@ -28,5 +28,5 @@ def get_async_engine() -> AsyncEngine:
         if url.startswith("sqlite"):
             _engine = create_async_engine(url, connect_args={"check_same_thread": False})
         else:
-            _engine = create_async_engine(url, pool_size=5, max_overflow=10)
+            _engine = create_async_engine(url, pool_size=5, max_overflow=10, pool_pre_ping=True)
     return _engine

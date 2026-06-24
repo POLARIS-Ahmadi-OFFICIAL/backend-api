@@ -51,6 +51,9 @@ def init_database() -> str:
             print(result.stderr, file=sys.stderr)
             raise RuntimeError(f"Alembic migration failed: {result.stderr}")
         print(result.stdout)
+        # Seed default rows (idempotent — checks before inserting)
+        from app.tools.database import DatabaseManager
+        DatabaseManager().ensure_defaults()
         return "postgres"
     else:
         from app.tools.database import DatabaseManager
