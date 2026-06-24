@@ -95,8 +95,10 @@ def main() -> int:
             placeholders = ", ".join(f":{c}" for c in cols)
             pk_col = "id" if "id" in cols else ("key" if "key" in cols else cols[0])
             if pk_col == "key":
+                # key-keyed tables (app_config): upsert so latest SQLite value wins
                 upsert = f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) ON CONFLICT (key) DO UPDATE SET {', '.join(f'{c}=EXCLUDED.{c}' for c in cols if c != 'key')}"
             else:
+                # id-keyed tables: DO NOTHING — one-time migration, skip duplicates safely
                 upsert = f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) ON CONFLICT ({pk_col}) DO NOTHING"
             for row in rows:
                 params = dict(row)

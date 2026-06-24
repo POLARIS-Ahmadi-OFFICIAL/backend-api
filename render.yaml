@@ -9,6 +9,8 @@ services:
         fromDatabase:
           name: polaris-db
           property: connectionString
+      # Update CORS_ORIGINS in the Render dashboard after deploy to include your Vercel URL
+      # e.g. add: ,https://your-app.vercel.app
       - key: CORS_ORIGINS
         value: http://localhost:3000,http://127.0.0.1:3000,http://localhost:8081,http://127.0.0.1:8081
       - key: AUTH_DISABLED
