@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables import RunnableConfig
 
 from app.graph.state import PolarisGraphState
-from app.llm.chains.experiment import plan_tot_chain, worklist_chain
+from app.llm.chains.experiment import plan_tot_chain
 from app.services.experiment_service import run_experiment_pipeline
 from app.services.memory_service import get_memory_manager
 from app.tools.memory_adapter import MemoryAdapter
@@ -12,8 +15,6 @@ from app.tools.memory_adapter import MemoryAdapter
 
 async def _build_context_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
     memory = get_memory_manager()
-    hypothesis = memory.view_component("hypothesis") or memory.get_var("last_hypothesis") or ""
-    constraints = memory.get_var("experimental_constraints") or ""
     return MemoryAdapter.write(
         memory, state,
         current_agent="experiment",
@@ -31,12 +32,10 @@ async def _generate_plan_node(state: PolarisGraphState, config: RunnableConfig) 
             "clarified_question": clarified_question,
             "experimental_constraints": constraints,
         })
-        memory.set_var("experimental_plan", plan)
+        return MemoryAdapter.write(memory, state, experimental_plan=plan)
     except Exception as exc:
-        import logging
         logging.getLogger(__name__).warning("Plan generation chain failed: %s", exc)
-        plan = memory.get_var("experimental_plan") or ""
-    return {**state}
+        return {**state}
 
 
 async def _generate_worklist_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
@@ -51,7 +50,7 @@ async def _generate_worklist_node(state: PolarisGraphState, config: RunnableConf
     )
 
 
-def experiment_subgraph() -> object:
+def experiment_subgraph() -> CompiledStateGraph:
     """Build and compile the 3-node experiment sub-graph."""
     g = StateGraph(PolarisGraphState)
     g.add_node("build_context", _build_context_node)

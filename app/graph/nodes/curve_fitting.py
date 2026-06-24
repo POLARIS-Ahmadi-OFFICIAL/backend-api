@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables import RunnableConfig
 
 from app.graph.state import PolarisGraphState
@@ -11,7 +12,6 @@ from app.tools.memory_adapter import MemoryAdapter
 
 async def _load_data_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
     memory = get_memory_manager()
-    uploaded = memory.get_var("uploaded_files") or []
     return MemoryAdapter.write(
         memory, state,
         current_agent="curve_fitting",
@@ -38,7 +38,7 @@ async def _export_results_node(state: PolarisGraphState, config: RunnableConfig)
     return MemoryAdapter.write(memory, state, stage="curve_fitting")
 
 
-def curve_fitting_subgraph() -> object:
+def curve_fitting_subgraph() -> CompiledStateGraph:
     """Build and compile the 3-node curve fitting sub-graph."""
     g = StateGraph(PolarisGraphState)
     g.add_node("load_data", _load_data_node)
