@@ -45,17 +45,21 @@ async def _evaluate_outcome_node(state: PolarisGraphState, config: RunnableConfi
 async def _decide_next_step_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
     memory = get_memory_manager()
     verdict = memory.get_var("analysis_verdict") or "complete"
-    payload = {
-        "stage": "analysis",
-        "verdict": verdict,
-        "hint": "Analysis complete. Review before finalizing.",
-    }
-    interrupt(payload)  # pause — frontend reviews; on resume, graph routes via conditional edge
     return MemoryAdapter.write(
         memory, state,
         stage=verdict,
-        interrupt_payload=None,
+        interrupt_payload={
+            "stage": "analysis",
+            "verdict": verdict,
+            "hint": "Analysis complete. Review before finalizing.",
+        },
     )
+
+
+async def _analysis_checkpoint_node(state: PolarisGraphState, config: RunnableConfig) -> PolarisGraphState:
+    payload = state.get("interrupt_payload") or {}
+    interrupt(payload)  # pause — frontend reviews; resumes via POST /pipeline/resume
+    return {**state, "interrupt_payload": None}
 
 
 def _route_after_decide(state: PolarisGraphState) -> str:
@@ -71,12 +75,14 @@ def analysis_subgraph() -> CompiledStateGraph:
     g.add_node("run_analysis", _run_analysis_node)
     g.add_node("evaluate_outcome", _evaluate_outcome_node)
     g.add_node("decide_next_step", _decide_next_step_node)
+    g.add_node("analysis_checkpoint", _analysis_checkpoint_node)
     g.set_entry_point("gather_context")
     g.add_edge("gather_context", "run_analysis")
     g.add_edge("run_analysis", "evaluate_outcome")
     g.add_edge("evaluate_outcome", "decide_next_step")
+    g.add_edge("decide_next_step", "analysis_checkpoint")
     g.add_conditional_edges(
-        "decide_next_step",
+        "analysis_checkpoint",
         _route_after_decide,
         {"needs_more_experiments": END, "complete": END},
     )

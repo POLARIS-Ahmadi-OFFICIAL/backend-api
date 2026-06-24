@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from langgraph.types import Command
+
 from app.graph.interrupts import build_resume_config, build_start_config
 from app.graph.pipeline import get_pipeline
 from app.graph.state import PolarisGraphState
@@ -88,7 +90,7 @@ async def resume_pipeline(body: ResumeRequest) -> Dict[str, Any]:
 
     try:
         await pipeline.aupdate_state(config, {"interrupt_payload": None})
-        async for _ in pipeline.astream(None, config=config):
+        async for _ in pipeline.astream(Command(resume=body.decision), config=config):
             pass
     except Exception as exc:
         _logger.debug("Pipeline paused or errored on resume: %s", exc)
