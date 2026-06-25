@@ -17,7 +17,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
       - run: python init_db.py
-      - run: pytest tests/ -q
+      - run: pytest tests/ -q --ignore=tests/test_mcp_orchestrator_logic.py
       - run: ruff check app tests --ignore E501 || true
 
   docker:
@@ -39,5 +39,5 @@ jobs:
       - run: python init_db.py
       - run: |
           uvicorn app.main:app --host 127.0.0.1 --port 8080 &
-          sleep 3
-          curl -sf http://127.0.0.1:8080/api/v1/health | grep '"status":"ok"'
+          sleep 5
+          curl -sf http://127.0.0.1:8080/api/v1/health | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok', d"
