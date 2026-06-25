@@ -1,0 +1,142 @@
+"""FastAPI router — Literature Agent endpoints."""
+
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from app.core.auth import AuthUser
+from app.core.deps import get_current_user
+from app.tools.literature_agent_service import LiteratureAgentConfig, LiteratureAgentService
+
+router = APIRouter()
+
+VALID_STAGES = {"extract_batch", "vision_pass", "sanitize_summaries", "integrate_and_model", "knowledge_graph"}
+
+
+def get_service() -> LiteratureAgentService:
+    return LiteratureAgentService(LiteratureAgentConfig.load())
+
+
+# ── Request / Response models ───────────────────────────────────────────────
+
+class LiteratureSearchRequest(BaseModel):
+    query: str
+    limit: int = 5
+
+
+class PaperHit(BaseModel):
+    paper_slug: str
+    title: str
+    doi: str | None = None
+    score: int
+    summary_excerpt: str
+
+
+class JobSummary(BaseModel):
+    job_id: str
+    stage: str
+    status: str
+    created_at: float
+
+
+class JobDetail(JobSummary):
+    log_tail: str
+    return_code: int | None = None
+
+
+class StartStageRequest(BaseModel):
+    stage: str
+    search_query: str = "perovskite solar cell stability T80 retention"
+    max_papers: int = 100
+
+
+# ── Endpoints ────────────────────────────────────────────────────────────────
+
+@router.get("/literature/health")
+def get_literature_health(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    svc = get_service()
+    health = svc.health()
+    return {
+        "ok": health.get("ok", False),
+        "active_jobs": health.get("active_jobs", []),
+        "path_checks": health.get("path_checks", {}),
+    }
+
+
+@router.post("/literature/search", response_model=list[PaperHit])
+def search_literature(
+    body: LiteratureSearchRequest,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> list[PaperHit]:
+    svc = get_service()
+    hits = svc.search(body.query, limit=body.limit)
+    return [PaperHit(**h) for h in hits]
+
+
+@router.get("/literature/jobs", response_model=list[JobSummary])
+def list_literature_jobs(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> list[JobSummary]:
+    svc = get_service()
+    jobs = svc.list_jobs()
+    return [
+        JobSummary(
+            job_id=j.job_id,
+            stage=j.stage,
+            status=j.status,
+            created_at=j.created_at,
+        )
+        for j in jobs
+    ]
+
+
+@router.get("/literature/jobs/{job_id}", response_model=JobDetail)
+def get_literature_job(
+    job_id: str,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> JobDetail:
+    svc = get_service()
+    status = svc.job_status(job_id)
+    return JobDetail(
+        job_id=status["job_id"],
+        stage=status["stage"],
+        status=status["status"],
+        created_at=status["created_at"],
+        log_tail=status.get("log_tail", ""),
+        return_code=status.get("return_code"),
+    )
+
+
+@router.post("/literature/start_stage")
+def start_literature_stage(
+    body: StartStageRequest,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    if body.stage not in VALID_STAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid stage '{body.stage}'. Must be one of: {sorted(VALID_STAGES)}",
+        )
+    svc = get_service()
+    job = svc.start_stage(
+        body.stage,
+        request={
+            "search_query": body.search_query,
+            "max_papers": body.max_papers,
+            "disable_google_drive": True,
+        },
+    )
+    return {"job_id": job["job_id"], "status": job["status"]}
+
+
+@router.delete("/literature/jobs/{job_id}")
+def cancel_literature_job(
+    job_id: str,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    svc = get_service()
+    result = svc.cancel_job(job_id)
+    return {"job_id": result["job_id"], "status": result["status"]}
