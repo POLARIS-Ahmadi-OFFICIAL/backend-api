@@ -211,3 +211,4 @@ The existing `getApiBase()` in `src/lib/api-base.ts` already reads this — no c
 - Authentication (`AUTH_DISABLED` remains configurable; Supabase JWT wiring is a separate project)
 - Moving the Next.js frontend off Vercel
 - Horizontal scaling / read replicas (single Render instance is sufficient for initial public launch)
+
