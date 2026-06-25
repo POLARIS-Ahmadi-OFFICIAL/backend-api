@@ -1,6 +1,6 @@
-from tools.literature_agent_service import LiteratureAgentConfig, LiteratureAgentService
-from tools.agent_contract import AgentTask
-from tools.polaris_orchestrator import PolarisOrchestrator
+from app.tools.literature_agent_service import LiteratureAgentConfig, LiteratureAgentService
+from app.tools.agent_contract import AgentTask
+from app.tools.polaris_orchestrator import PolarisOrchestrator
 
 
 def test_health_and_artifact_contract():
