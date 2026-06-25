@@ -57,13 +57,16 @@ class StartStageRequest(BaseModel):
 def get_literature_health(
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> dict:
-    svc = get_service()
-    health = svc.health()
-    return {
-        "ok": health.get("ok", False),
-        "active_jobs": health.get("active_jobs", []),
-        "path_checks": health.get("path_checks", {}),
-    }
+    try:
+        svc = get_service()
+        health = svc.health()
+        return {
+            "ok": health.get("ok", False),
+            "active_jobs": health.get("active_jobs", []),
+            "path_checks": health.get("path_checks", {}),
+        }
+    except Exception:
+        return {"ok": False, "active_jobs": [], "path_checks": {}}
 
 
 @router.post("/literature/search", response_model=list[PaperHit])

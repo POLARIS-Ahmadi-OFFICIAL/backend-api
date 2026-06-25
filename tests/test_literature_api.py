@@ -13,20 +13,6 @@ def _mock_user():
     return AuthUser(id="test-user", email="test@example.com")
 
 
-def _make_client(mock_service: MagicMock) -> TestClient:
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides = {}
-
-    import app.api.v1.literature as lit_module
-    import app.core.deps as deps_module
-
-    app.dependency_overrides[deps_module.get_current_user] = _mock_user
-
-    with patch.object(lit_module, "get_service", return_value=mock_service):
-        client = TestClient(app)
-        yield client
-
 
 @pytest.fixture
 def svc():
@@ -137,3 +123,18 @@ def test_delete_job_cancels(svc):
         resp = client.delete("/literature/jobs/job_abc")
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
+
+
+def test_health_returns_ok_false_on_unconfigured_service():
+    import app.api.v1.literature as lit_module
+    import app.core.deps as deps_module
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[deps_module.get_current_user] = _mock_user
+
+    with patch.object(lit_module, "get_service", side_effect=OSError("path not found")):
+        client = TestClient(app)
+        resp = client.get("/literature/health")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
