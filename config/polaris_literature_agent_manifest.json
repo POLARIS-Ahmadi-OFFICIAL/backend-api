@@ -1,0 +1,44 @@
+{
+  "agent_id": "literature_agent",
+  "display_name": "LiteratureAgent",
+  "domain": "halide_perovskite_literature",
+  "version": "v21.4-polaris-live-adapter",
+  "execution": {
+    "mode": "durable_subprocess_jobs",
+    "job_state": "E:\\LiteratureAgent\\polaris_jobs",
+    "stages": [
+      "extract_batch",
+      "vision_pass",
+      "sanitize_summaries",
+      "integrate_and_model",
+      "knowledge_graph"
+    ]
+  },
+  "tools": {
+    "health": "LiteratureAgentService.health",
+    "artifacts": "LiteratureAgentService.artifact_manifest",
+    "search": "LiteratureAgentService.search",
+    "evidence_context": "LiteratureAgentService.evidence_context",
+    "evidence_packet": "LiteratureAgentService.evidence_packet",
+    "scientific_relationship_search": "LiteratureAgentService.search_relationships",
+    "start_stage": "LiteratureAgentService.start_stage",
+    "job_status": "LiteratureAgentService.job_status",
+    "cancel_job": "LiteratureAgentService.cancel_job"
+  },
+  "join_keys": [
+    "paper_slug",
+    "doi",
+    "pdf_hash"
+  ],
+  "orchestration": {
+    "task_contract": "tools.agent_contract.AgentTask",
+    "result_contract": "tools.agent_contract.AgentResult",
+    "registry": "tools.polaris_orchestrator.PolarisOrchestrator"
+  },
+  "safety": {
+    "inline_vision": false,
+    "embedded_reset": false,
+    "search_expansion_uses_google_drive": false,
+    "strict_family_gating": true
+  }
+}

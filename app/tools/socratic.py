@@ -84,6 +84,18 @@ def _lazy_import_given_vars():
     return _given_vars
 
 
+def get_local_literature_context(query: str, limit: int = 5) -> str:
+    """Retrieve evidence-grounded context from the local LiteratureAgent corpus."""
+    try:
+        from app.tools.polaris_orchestrator import PolarisOrchestrator
+        return PolarisOrchestrator().literature_evidence(query, limit=limit).get(
+            "formatted_context", "Local LiteratureAgent evidence was unavailable."
+        )
+    except Exception as exc:
+        logging.warning(f"Local LiteratureAgent evidence retrieval unavailable: {exc}")
+        return "Local LiteratureAgent evidence was unavailable for this analysis."
+
+
 def generate_text_with_llm(prompt: str) -> str:
     """Generate text using provider/model/API key from Settings (SQLite), not stale .env."""
     try:
@@ -318,13 +330,23 @@ def socratic_answer_questions(clarified_question: str, probing_questions: str) -
         # Lazy import instructions
         instructions = _lazy_import_instructions()
         SOCRATIC_ANSWER_INSTRUCTIONS = instructions[2]  # SOCRATIC_ANSWER_INSTRUCTIONS is now at index 2
-        
+
+        literature_context = get_local_literature_context(
+            f"{clarified_question}\n{cleaned_questions_text}",
+            limit=4,
+        )
         socratic_answer_prompt = f"""
 {SOCRATIC_ANSWER_INSTRUCTIONS}
 
 User Question: {clarified_question}
 
 Probing Questions: {cleaned_questions_text}
+
+Evidence-grounded local literature packet:
+{literature_context}
+
+Use this packet to ground examples and mechanisms. Clearly distinguish direct
+literature evidence from scientific inference. Do not invent citations or metrics.
 """
         
         logging.info("Constructed socratic answer prompt")
@@ -521,13 +543,19 @@ def tot_generation(socratic_pass_questioning: str, clarified_question: str, socr
 
         # If we have answers, use them; otherwise use questions
         reasoning_context = socratic_answers if socratic_answers else socratic_pass_questioning
+        literature_context = get_local_literature_context(clarified_question, limit=4)
 
         tot_generation_prompt = f"""
         {TOT_INSTRUCTIONS}
         User Question: {clarified_question}
         Socratic Answers: {reasoning_context}
+        Evidence-grounded local literature packet:
+        {literature_context}
+
+        Prefer lines of thought supported by the packet. Novel extrapolations are
+        allowed, but label them as hypotheses rather than established findings.
         """
-        
+
         if socratic_answers:
             logging.info(f"Generating TOT with socratic answers (length: {len(socratic_answers)})...")
         else:
@@ -1117,14 +1145,23 @@ def hypothesis_synthesis(socratic_question: str, next_step_option: str, previous
         instructions = _lazy_import_instructions()
         HYPOTHESIS_SYNTHESIS = instructions[5]
 
+        literature_context = get_local_literature_context(
+            f"{socratic_question}\n{next_step_option}\n{previous_option_1}\n{previous_option_2}",
+            limit=5,
+        )
         hypothesis_synthesis_prompt = f"""
             {HYPOTHESIS_SYNTHESIS}
             Socratic Question: {socratic_question}
             Next-Step Option: {next_step_option}
-            Previous Step Options: 
+            Previous Step Options:
                 Previous Option 1: {previous_option_1}
                 Previous Option 2: {previous_option_2}
             Full Conversation Context: {conversation_context}
+            Evidence-grounded local literature packet:
+            {literature_context}
+
+            Ground the hypothesis in supplied evidence, preserve provenance identifiers,
+            and explicitly label any unsupported extrapolation as a proposed mechanism.
             """
 
         llm_response = generate_text_with_llm(hypothesis_synthesis_prompt)
@@ -1139,16 +1176,133 @@ def hypothesis_synthesis(socratic_question: str, next_step_option: str, previous
         return f"Error generating hypothesis: {str(e)}. Please check your API key and try again."
 
 
+def analyze_hypothesis(hypothesis: str, socratic_question: str, rubric_weights=None):
+    """Score a hypothesis against local LiteratureAgent evidence and optional external retrieval."""
+    if rubric_weights is None:
+        rubric_weights = {"novelty": 1 / 3, "plausibility": 1 / 3, "testability": 1 / 3}
+
+    local_evidence = get_local_literature_context(f"{socratic_question}\n{hypothesis}", limit=5)
+    external_evidence = ""
+    if FUTUREHOUSE_API_KEY:
+        try:
+            EdisonClient, JobNames, TaskRequest, RuntimeConfig = _lazy_import_edison()
+            client = EdisonClient(api_key=FUTUREHOUSE_API_KEY)
+            task_data = TaskRequest(
+                name=JobNames.CROW,
+                query=socratic_question,
+                runtime_config=RuntimeConfig(max_steps=5)
+            )
+            responses = client.run_tasks_until_done(task_data)
+            external_evidence = responses[0].formatted_answer.strip()
+        except Exception as exc:
+            logging.warning(f"External literature retrieval unavailable; using LiteratureAgent only: {exc}")
+    evidence_summary = (
+        f"LOCAL LITERATUREAGENT EVIDENCE:\n{local_evidence}\n\n"
+        f"EXTERNAL RETRIEVAL EVIDENCE:\n{external_evidence or 'not available'}"
+    )
+
+    prior_matches = len(re.findall(re.escape(hypothesis), evidence_summary, flags=re.IGNORECASE))
+    novelty_score = max(0.0, 1.0 - min(prior_matches, 10) * 0.1)
+    novelty_reason = (
+        "High novelty: little to no direct matches found in literature."
+        if novelty_score > 0.8 else
+        "Moderate novelty: related ideas appear in literature."
+        if 0.4 < novelty_score <= 0.8 else
+        "Low novelty: hypothesis closely resembles existing findings."
+    )
+
+    key_terms = re.findall(r"\b\w+\b", hypothesis)
+    hits = sum(1 for term in key_terms if re.search(rf"\b{re.escape(term)}\b", evidence_summary, flags=re.IGNORECASE))
+    plausibility_score = min(1.0, hits / max(len(key_terms), 1))
+    plausibility_reason = (
+        "Strong conceptual support in related studies."
+        if plausibility_score > 0.7 else
+        "Partial conceptual alignment with existing evidence."
+        if 0.4 < plausibility_score <= 0.7 else
+        "Weak or minimal evidence supporting the hypothesis."
+    )
+
+    test_keywords = ["experiment", "measure", "observe", "compare", "test", "quantify", "analyze"]
+    found_keywords = [kw for kw in test_keywords if re.search(rf"\b{kw}\b", evidence_summary, re.IGNORECASE)]
+    testability_score = 1.0 if found_keywords else 0.5
+    testability_reason = (
+        "Evidence discusses measurable or experimental approaches."
+        if found_keywords else
+        "Limited direct mention of testable or measurable outcomes."
+    )
+
+    scores = {
+        "novelty": novelty_score,
+        "plausibility": plausibility_score,
+        "testability": testability_score
+    }
+    weighted_score = sum(scores[k] * rubric_weights[k] for k in rubric_weights)
+
+    report = f"""
+### Hypothesis Evaluation Report
+
+**Hypothesis:**
+{hypothesis}
+
+---
+
+#### Evidence Summary:
+{evidence_summary}
+
+---
+
+#### Scoring Breakdown:
+
+| Criterion | Score | Explanation |
+|:-----------|:------:|:------------|
+| **Novelty** | {novelty_score:.2f} | {novelty_reason} |
+| **Plausibility** | {plausibility_score:.2f} | {plausibility_reason} |
+| **Testability** | {testability_score:.2f} | {testability_reason} |
+
+**Weighted Total Score:** {weighted_score:.2f}
+
+---
+
+#### Interpretation:
+- **> 0.80:** Highly original, plausible, and testable.
+- **0.50 – 0.80:** Promising but may need refinement or stronger evidence.
+- **< 0.50:** Likely weak, redundant, or insufficiently grounded.
+
+---
+
+*Generated from LiteratureAgent local evidence, optional external retrieval,
+and heuristic rubric evaluation.*
+"""
+
+    return {
+        "evidence_summary": evidence_summary,
+        "scores": scores,
+        "weighted_score": weighted_score,
+        "report": report.strip()
+    }
+
+
 def local_hypothesis_analysis_fallback(hypothesis: str, socratic_question: str) -> str:
     try:
         # Lazy import instructions
         instructions = _lazy_import_instructions()
         HYPOTHESIS_ANALYSIS_REPORT = instructions[6]
 
+        literature_context = get_local_literature_context(
+            f"{socratic_question}\n{hypothesis}",
+            limit=5,
+        )
         hypothesis_analysis_report_prompt = f"""
         {HYPOTHESIS_ANALYSIS_REPORT}
         Hypothesis: {hypothesis}
         Socratic Question: {socratic_question}
+
+        Evidence-grounded local literature context:
+        {literature_context}
+
+        Use the local literature context as supporting evidence. Distinguish direct
+        evidence from inference, retain DOI/paper identifiers when available, and do
+        not invent claims that are absent from the supplied context.
         """
 
         llm_response = generate_text_with_llm(hypothesis_analysis_report_prompt)
