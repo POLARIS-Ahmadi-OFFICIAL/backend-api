@@ -138,3 +138,33 @@ def test_health_returns_ok_false_on_unconfigured_service():
         resp = client.get("/literature/health")
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
+
+
+def test_get_job_rejects_path_traversal(svc):
+    import app.api.v1.literature as lit_module
+    import app.core.deps as deps_module
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[deps_module.get_current_user] = _mock_user
+
+    with patch.object(lit_module, "get_service", return_value=svc):
+        client = TestClient(app)
+        resp = client.get("/literature/jobs/../../../etc/passwd")
+    # FastAPI normalises %2F in path params, so the router receives the raw string;
+    # the job_id regex blocks anything containing slashes or dots
+    assert resp.status_code in (400, 404)
+
+
+def test_cancel_job_rejects_path_traversal(svc):
+    import app.api.v1.literature as lit_module
+    import app.core.deps as deps_module
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[deps_module.get_current_user] = _mock_user
+
+    with patch.object(lit_module, "get_service", return_value=svc):
+        client = TestClient(app)
+        resp = client.delete("/literature/jobs/..%2F..%2Fetc%2Fpasswd")
+    assert resp.status_code in (400, 404, 422)

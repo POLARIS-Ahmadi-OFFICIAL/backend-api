@@ -1,5 +1,6 @@
 """FastAPI router — Literature Agent endpoints."""
 
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +11,13 @@ from app.core.deps import get_current_user
 from app.tools.literature_agent_service import LiteratureAgentConfig, LiteratureAgentService
 
 router = APIRouter()
+
+_JOB_ID_RE = re.compile(r'^[a-zA-Z0-9_\-]{1,128}$')
+
+
+def _validate_job_id(job_id: str) -> None:
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job_id format")
 
 VALID_STAGES = {"extract_batch", "vision_pass", "sanitize_summaries", "integrate_and_model", "knowledge_graph"}
 
@@ -101,6 +109,7 @@ def get_literature_job(
     job_id: str,
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> JobDetail:
+    _validate_job_id(job_id)
     svc = get_service()
     status = svc.job_status(job_id)
     return JobDetail(
@@ -140,6 +149,7 @@ def cancel_literature_job(
     job_id: str,
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> dict:
+    _validate_job_id(job_id)
     svc = get_service()
     result = svc.cancel_job(job_id)
     return {"job_id": result["job_id"], "status": result["status"]}
