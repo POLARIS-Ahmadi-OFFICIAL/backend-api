@@ -649,6 +649,9 @@ class DatabaseManager:
             state = json.loads(row[0] or "{}") if row else {}
             new_state = {k: v for k, v in state.items() if k in keep_keys}
             await conn.execute(text("UPDATE session_state SET state_json = :s WHERE id = 1"), {"s": json.dumps(new_state)})
+            # Reset experiment-scoped app_config key; DELETE lets get() fall back to DEFAULT_APP_CONFIG["stage"] = "initial"
+            if "stage" not in keep_keys:
+                await conn.execute(text("DELETE FROM app_config WHERE key = 'stage'"))
 
     def clear_all_except(self, keep_keys: List[str]) -> None:
         _run(self._clear_all_except_async(keep_keys))
