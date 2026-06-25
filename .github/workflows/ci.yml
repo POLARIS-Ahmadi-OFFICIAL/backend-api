@@ -39,5 +39,8 @@ jobs:
       - run: python init_db.py
       - run: |
           uvicorn app.main:app --host 127.0.0.1 --port 8080 &
-          sleep 5
-          curl -sf http://127.0.0.1:8080/api/v1/health | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok', d"
+          for i in $(seq 1 20); do
+            sleep 1
+            curl -sf http://127.0.0.1:8080/api/v1/health > /tmp/health.json 2>/dev/null && break
+          done
+          python3 -c "import json; d=json.load(open('/tmp/health.json')); assert d.get('status')=='ok', d"
