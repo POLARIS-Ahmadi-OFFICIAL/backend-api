@@ -1,5 +1,7 @@
 # Deploy POLARIS API on Railway
 
+> **Archived.** Production moved to Render + Postgres; see [`docs/DEPLOY.md`](../DEPLOY.md). Kept for anyone still running a Railway instance.
+
 Railway runs the **backend-api** repo. Vercel runs **web-frontend** and calls this API via `NEXT_PUBLIC_API_URL`.
 
 ## 1. Create the Railway service
@@ -23,7 +25,7 @@ The API uses **SQLite** on disk. Without a volume, data is lost on every deploy.
 
 ## 3. Environment variables
 
-Copy from [`.env.example`](../.env.example) and set in Railway → **Variables**:
+Copy from [`.env.example`](../../.env.example) and set in Railway → **Variables**:
 
 | Variable | Production guidance |
 |----------|---------------------|
